@@ -1,0 +1,80 @@
+name: "⚡ CRD Connect (Safe Version)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      CODE:
+        description: "Paste the FULL command from Google"
+        required: true
+      PIN:
+        description: "CRD PIN (6+ digits)"
+        required: false
+        default: "123456"
+
+jobs:
+  crd-connect:
+    runs-on: windows-latest
+    steps:
+      - name: "🚀 Setup & Connect"
+        shell: pwsh
+        env:
+          # Passing the input via ENV variable is the ONLY safe way to handle strings with % symbols in PowerShell
+          RAW_INPUT_CODE: ${{ github.event.inputs.CODE }}
+          INPUT_PIN: ${{ github.event.inputs.PIN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          
+          # 1. Access inputs from Environment Variables (Safe from ParserErrors)
+          $inputCode = $env:RAW_INPUT_CODE
+          $pin = $env:INPUT_PIN
+          
+          # Mask them in logs
+          Write-Host "::add-mask::$inputCode"
+          Write-Host "::add-mask::$pin"
+
+          # 2. Extract Token (Robust Regex)
+          if ($inputCode -match '4/[A-Za-z0-9_\-\.\~]+') {
+              $token = $Matches[0]
+          } else {
+              $token = $inputCode.Trim().Trim("'").Trim('"')
+          }
+          Write-Host "::add-mask::$token"
+          Write-Host "Extracted Token: [MASKED]"
+
+          # 3. Download and Install CRD
+          Write-Host "📥 Downloading Chrome Remote Desktop..."
+          $msiPath = "$env:TEMP\crd.msi"
+          Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile $msiPath -UseBasicParsing
+          
+          Write-Host "🔧 Installing..."
+          Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /qn /norestart" -Wait
+          
+          # 4. Locate Executable
+          $paths = @(
+              "${env:ProgramFiles(x86)}\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe",
+              "${env:ProgramFiles}\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe"
+          )
+          $exe = $null
+          foreach ($p in $paths) { if (Test-Path $p) { $exe = $p; break } }
+          if (-not $exe) { throw "CRD Executable not found!" }
+
+          # 5. Register Host
+          Write-Host "🌐 Registering..."
+          $name = "Runner-$($env:GITHUB_RUN_ID)"
+          
+          # Use Start-Process to avoid any further shell escaping issues
+          $proc = Start-Process -FilePath $exe -ArgumentList "--code=`"$token`"", "--redirect-url=`"https://remotedesktop.google.com/_/oauthredirect`"", "--name=`"$name`"", "--pin=`"$pin`"" -PassThru -Wait -NoNewWindow
+          
+          if ($proc.ExitCode -ne 0) {
+              Write-Error "Registration failed with exit code $($proc.ExitCode)"
+              exit 1
+          }
+          
+          Write-Host "✅ Setup Complete! Check https://remotedesktop.google.com/access"
+          
+          # 6. Keep Alive
+          Write-Host "⏳ Keeping session alive..."
+          while ($true) {
+              Write-Host "⏱️ Still active at $(Get-Date)"
+              Start-Sleep -Seconds 60
+          }
