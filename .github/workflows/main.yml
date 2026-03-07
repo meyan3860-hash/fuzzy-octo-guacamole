@@ -13,7 +13,7 @@ on:
 
 jobs:
   crd-connect:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: "🚀 Setup & Connect"
         shell: pwsh
