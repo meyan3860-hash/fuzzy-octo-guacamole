@@ -1,4 +1,4 @@
-name: "⚡ CRD Connect (Safe Version)"
+name: "⚡ CRD Connect (ClaudeQwen Version)"
 
 on:
   workflow_dispatch:
