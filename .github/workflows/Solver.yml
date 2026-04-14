@@ -138,16 +138,17 @@ jobs:
           $solverProc = $null
 
           # ── Helper: start i.exe ───────────────────────────────────────────────
+          # Mirror the bat file exactly: cmd /c "echo 8742| i.exe"
+          # File-based stdin redirect causes readline to get EOF and exit immediately
           function Start-Solver {
-              # Write port to file — i.exe reads it from stdin
-              "$PORT" | Out-File -FilePath "port_input.txt" -Encoding ascii -NoNewline
-              $proc = Start-Process -FilePath ".\i.exe" `
-                  -RedirectStandardInput  "port_input.txt" `
-                  -RedirectStandardOutput "solver.log" `
-                  -RedirectStandardError  "solver_err.log" `
+              $proc = Start-Process -FilePath "cmd.exe" `
+                  -ArgumentList "/c", "echo $PORT| .\i.exe >> solver.log 2>&1" `
                   -PassThru -NoNewWindow
               Write-Host "✅ Solver started (PID: $($proc.Id))"
-              Start-Sleep -Seconds 4
+              Start-Sleep -Seconds 5
+              # Show first lines of solver output for confirmation
+              Get-Content "solver.log" -Tail 5 -ErrorAction SilentlyContinue |
+                  ForEach-Object { Write-Host "   [solver] $_" }
               return $proc
           }
 
@@ -184,7 +185,10 @@ jobs:
 
               # Restart solver if it died before we even start tunnel
               if ($solverProc.HasExited) {
-                  Write-Host "⚠️  Solver was dead — restarting before tunnel..."
+                  Write-Host "⚠️  Solver was dead (exit: $($solverProc.ExitCode)) — last output:"
+                  Get-Content "solver.log" -Tail 15 -ErrorAction SilentlyContinue |
+                      ForEach-Object { Write-Host "   [solver] $_" }
+                  Write-Host "   Restarting solver..."
                   $solverProc = Start-Solver
               }
 
@@ -214,7 +218,9 @@ jobs:
 
                   # Restart solver if it died mid-run
                   if ($solverProc.HasExited) {
-                      Write-Host "⚠️  Solver died at $ts — restarting..."
+                      Write-Host "⚠️  Solver died at $ts (exit: $($solverProc.ExitCode)) — last output:"
+                      Get-Content "solver.log" -Tail 15 -ErrorAction SilentlyContinue |
+                          ForEach-Object { Write-Host "   [solver] $_" }
                       try { Stop-Process -Id $tunnel.proc.Id -Force -ErrorAction SilentlyContinue } catch {}
                       Start-Sleep -Seconds 2
                       $solverProc = Start-Solver
