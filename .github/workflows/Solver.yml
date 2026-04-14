@@ -1,0 +1,241 @@
+name: "🔥 Solver + Tunnel (Auto-Restart)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      CODE:
+        description: "CRD Code (paste from Google — optional, for manual fallback access)"
+        required: false
+        default: ""
+      PIN:
+        description: "CRD PIN (6+ digits)"
+        required: false
+        default: "123456"
+      DROPBOX_URL:
+        description: "i.exe download URL (leave blank to use saved default)"
+        required: false
+        default: ""
+      PORT:
+        description: "Solver port"
+        required: false
+        default: "8742"
+
+jobs:
+  solver:
+    runs-on: windows-latest
+    timeout-minutes: 350
+
+    steps:
+
+      # ── Step 1: CRD setup (manual fallback — skip if no CODE provided) ────────
+      - name: "🖥️ Setup CRD (manual fallback access)"
+        if: ${{ github.event.inputs.CODE != '' }}
+        shell: pwsh
+        env:
+          RAW_INPUT_CODE: ${{ github.event.inputs.CODE }}
+          INPUT_PIN: ${{ github.event.inputs.PIN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $inputCode = $env:RAW_INPUT_CODE
+          $pin       = $env:INPUT_PIN
+
+          Write-Host "::add-mask::$inputCode"
+          Write-Host "::add-mask::$pin"
+
+          # Extract token
+          if ($inputCode -match '4/[A-Za-z0-9_\-\.\~]+') {
+              $token = $Matches[0]
+          } else {
+              $token = $inputCode.Trim().Trim("'").Trim('"')
+          }
+          Write-Host "::add-mask::$token"
+          Write-Host "🔑 Token extracted: [MASKED]"
+
+          # Download + install CRD
+          Write-Host "📥 Downloading Chrome Remote Desktop..."
+          $msiPath = "$env:TEMP\crd.msi"
+          Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile $msiPath -UseBasicParsing
+
+          Write-Host "🔧 Installing CRD..."
+          Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /qn /norestart" -Wait
+
+          # Locate executable
+          $paths = @(
+              "${env:ProgramFiles(x86)}\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe",
+              "${env:ProgramFiles}\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe"
+          )
+          $exe = $null
+          foreach ($p in $paths) { if (Test-Path $p) { $exe = $p; break } }
+          if (-not $exe) { throw "CRD executable not found after install!" }
+
+          # Register host — CRD runs as a Windows service after this, no keep-alive loop needed
+          Write-Host "🌐 Registering CRD host..."
+          $name = "Runner-$($env:GITHUB_RUN_ID)"
+          $proc = Start-Process -FilePath $exe `
+              -ArgumentList "--code=`"$token`"", "--redirect-url=`"https://remotedesktop.google.com/_/oauthredirect`"", "--name=`"$name`"", "--pin=`"$pin`"" `
+              -PassThru -Wait -NoNewWindow
+
+          if ($proc.ExitCode -ne 0) {
+              throw "CRD registration failed (exit code $($proc.ExitCode))"
+          }
+
+          Write-Host "✅ CRD ready — connect at https://remotedesktop.google.com/access"
+          Write-Host "   Machine name: $name  |  PIN: [MASKED]"
+
+      # ── Step 2: Download i.exe ────────────────────────────────────────────────
+      - name: "📥 Download i.exe solver"
+        shell: pwsh
+        env:
+          DROPBOX_URL: ${{ github.event.inputs.DROPBOX_URL }}
+        run: |
+          $defaultUrl = "https://www.dropbox.com/scl/fi/ckwstjsl5m24nfx0al2l8/i.exe?rlkey=9pyceu1cwd8lkrtbqfk2lb8sf&st=5afwppz7&dl=1"
+          $url = if ($env:DROPBOX_URL -and $env:DROPBOX_URL.Trim()) { $env:DROPBOX_URL.Trim() } else { $defaultUrl }
+
+          Write-Host "📥 Downloading i.exe..."
+          $maxRetries = 3
+          for ($i = 1; $i -le $maxRetries; $i++) {
+              try {
+                  Invoke-WebRequest -Uri $url -OutFile "i.exe" -UseBasicParsing
+                  $sizeMB = [math]::Round((Get-Item "i.exe").Length / 1MB, 2)
+                  Write-Host "✅ i.exe downloaded ($sizeMB MB)"
+                  break
+              } catch {
+                  Write-Host "⚠️ Attempt $i/$maxRetries failed: $_"
+                  if ($i -eq $maxRetries) { throw "Failed to download i.exe after $maxRetries attempts" }
+                  Start-Sleep -Seconds 5
+              }
+          }
+
+      # ── Step 3: Download cloudflared ─────────────────────────────────────────
+      - name: "📥 Download cloudflared"
+        shell: pwsh
+        run: |
+          $url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+          Write-Host "📥 Downloading cloudflared..."
+          $maxRetries = 3
+          for ($i = 1; $i -le $maxRetries; $i++) {
+              try {
+                  Invoke-WebRequest -Uri $url -OutFile "cloudflared.exe" -UseBasicParsing
+                  $sizeMB = [math]::Round((Get-Item "cloudflared.exe").Length / 1MB, 2)
+                  Write-Host "✅ cloudflared downloaded ($sizeMB MB)"
+                  break
+              } catch {
+                  Write-Host "⚠️ Attempt $i/$maxRetries failed: $_"
+                  if ($i -eq $maxRetries) { throw "Failed to download cloudflared after $maxRetries attempts" }
+                  Start-Sleep -Seconds 5
+              }
+          }
+
+      # ── Step 4: Solver + Tunnel auto-restart loop ─────────────────────────────
+      - name: "🚀 Run Solver + Tunnel (auto-restart)"
+        shell: pwsh
+        env:
+          INPUT_PORT: ${{ github.event.inputs.PORT }}
+        run: |
+          $PORT       = if ($env:INPUT_PORT) { $env:INPUT_PORT } else { "8742" }
+          $restarts   = 0
+          $solverProc = $null
+
+          # ── Helper: start i.exe ───────────────────────────────────────────────
+          function Start-Solver {
+              # Write port to file — i.exe reads it from stdin
+              "$PORT" | Out-File -FilePath "port_input.txt" -Encoding ascii -NoNewline
+              $proc = Start-Process -FilePath ".\i.exe" `
+                  -RedirectStandardInput  "port_input.txt" `
+                  -RedirectStandardOutput "solver.log" `
+                  -RedirectStandardError  "solver_err.log" `
+                  -PassThru -NoNewWindow
+              Write-Host "✅ Solver started (PID: $($proc.Id))"
+              Start-Sleep -Seconds 4
+              return $proc
+          }
+
+          # ── Helper: start tunnel, return proc + captured URL ─────────────────
+          function Start-Tunnel {
+              $logFile = "tunnel_$(Get-Date -Format 'HHmmss').log"
+              $proc = Start-Process -FilePath ".\cloudflared.exe" `
+                  -ArgumentList "tunnel", "--url", "http://localhost:$PORT" `
+                  -RedirectStandardError $logFile `
+                  -PassThru -NoNewWindow
+
+              # Wait up to 40s for the trycloudflare URL to appear
+              $url     = $null
+              $waited  = 0
+              while (-not $url -and $waited -lt 40) {
+                  Start-Sleep -Seconds 1
+                  $waited++
+                  $content = Get-Content $logFile -Raw -ErrorAction SilentlyContinue
+                  if ($content -match 'https://[a-z0-9\-]+\.trycloudflare\.com') {
+                      $url = $Matches[0]
+                  }
+              }
+              return @{ proc = $proc; url = $url; log = $logFile }
+          }
+
+          # ── Initial solver start ──────────────────────────────────────────────
+          $solverProc = Start-Solver
+
+          # ── Main loop ─────────────────────────────────────────────────────────
+          while ($true) {
+              Write-Host ""
+              Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              Write-Host "🌐 Starting tunnel (restart #$restarts)..."
+
+              # Restart solver if it died before we even start tunnel
+              if ($solverProc.HasExited) {
+                  Write-Host "⚠️  Solver was dead — restarting before tunnel..."
+                  $solverProc = Start-Solver
+              }
+
+              $tunnel = Start-Tunnel
+
+              if ($tunnel.url) {
+                  Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                  Write-Host "✅  TUNNEL URL  : $($tunnel.url)"
+                  Write-Host "🔗  ENDPOINT    : $($tunnel.url)/cloudflare"
+                  Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              } else {
+                  Write-Host "⚠️  URL not captured in 40s — tunnel may still be starting, check logs"
+                  # Dump last few lines of tunnel log for debugging
+                  $content = Get-Content $tunnel.log -Tail 10 -ErrorAction SilentlyContinue
+                  $content | ForEach-Object { Write-Host "   [tunnel] $_" }
+              }
+
+              # ── Monitor loop — checks every 15s ──────────────────────────────
+              while (-not $tunnel.proc.HasExited) {
+                  Start-Sleep -Seconds 15
+
+                  $ts           = Get-Date -Format "HH:mm:ss"
+                  $solverAlive  = -not $solverProc.HasExited
+                  $tunnelAlive  = -not $tunnel.proc.HasExited
+
+                  Write-Host "⏱️  $ts | tunnel=$tunnelAlive | solver=$solverAlive | restarts=$restarts"
+
+                  # Restart solver if it died mid-run
+                  if ($solverProc.HasExited) {
+                      Write-Host "⚠️  Solver died at $ts — restarting..."
+                      try { Stop-Process -Id $tunnel.proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+                      Start-Sleep -Seconds 2
+                      $solverProc = Start-Solver
+                      break  # break inner loop → outer loop restarts tunnel too
+                  }
+
+                  # Re-print URL every 5 min so it's easy to find in long logs
+                  if ($tunnel.url -and ((Get-Date).Minute % 5 -eq 0) -and ((Get-Date).Second -lt 20)) {
+                      Write-Host "🔗  Reminder — endpoint: $($tunnel.url)/cloudflare"
+                  }
+              }
+
+              # Tunnel exited — log reason then restart
+              $exitCode = $tunnel.proc.ExitCode
+              $restarts++
+              Write-Host ""
+              Write-Host "⚡  Tunnel exited (code: $exitCode) — restarting in 5s... (total restarts: $restarts)"
+
+              # Dump last 15 lines of tunnel log to help diagnose why it died
+              $tail = Get-Content $tunnel.log -Tail 15 -ErrorAction SilentlyContinue
+              $tail | ForEach-Object { Write-Host "   [tunnel-log] $_" }
+
+              Start-Sleep -Seconds 5
+          }
