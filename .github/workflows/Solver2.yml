@@ -1,10 +1,10 @@
-name: "⚡ CF Solver + Tunnel (Auto-Restart)"
+name: "CF Solver + Tunnel (Auto-Restart)"
 
 on:
   workflow_dispatch:
     inputs:
       CODE:
-        description: "CRD Code (paste from Google — optional, for manual fallback access)"
+        description: "CRD Code (paste from Google -- optional, for manual fallback access)"
         required: false
         default: ""
       PIN:
@@ -16,7 +16,7 @@ on:
         required: false
         default: ""
       PORT:
-        description: "Solver port (wrapper listens here; i.exe runs on PORT+1 internally)"
+        description: "Public port (wrapper listens here; i.exe runs on PORT+1)"
         required: false
         default: "8742"
 
@@ -28,11 +28,11 @@ jobs:
     steps:
 
       # ── Step 1: Checkout repo (gets wrapper.py) ───────────────────────────────
-      - name: "📦 Checkout repository"
+      - name: "Checkout repository"
         uses: actions/checkout@v4
 
-      # ── Step 2: CRD setup (manual fallback — skip if no CODE provided) ────────
-      - name: "🖥️ Setup CRD (manual fallback access)"
+      # ── Step 2: CRD setup (skip if no CODE) ──────────────────────────────────
+      - name: "Setup CRD (manual fallback access)"
         if: ${{ github.event.inputs.CODE != '' }}
         shell: pwsh
         env:
@@ -47,24 +47,20 @@ jobs:
           Write-Host "::add-mask::$inputCode"
           Write-Host "::add-mask::$pin"
 
-          # Extract token
           if ($inputCode -match '4/[A-Za-z0-9_\-\.\~]+') {
               $token = $Matches[0]
           } else {
               $token = $inputCode.Trim().Trim("'").Trim('"')
           }
           Write-Host "::add-mask::$token"
-          Write-Host "🔑 Token extracted: [MASKED]"
 
-          # Download + install CRD
-          Write-Host "📥 Downloading Chrome Remote Desktop..."
+          Write-Host "Downloading Chrome Remote Desktop..."
           $msiPath = "$env:TEMP\crd.msi"
           Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile $msiPath -UseBasicParsing
 
-          Write-Host "🔧 Installing CRD..."
+          Write-Host "Installing CRD..."
           Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /qn /norestart" -Wait
 
-          # Locate executable
           $paths = @(
               "${env:ProgramFiles(x86)}\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe",
               "${env:ProgramFiles}\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe"
@@ -73,8 +69,6 @@ jobs:
           foreach ($p in $paths) { if (Test-Path $p) { $exe = $p; break } }
           if (-not $exe) { throw "CRD executable not found after install!" }
 
-          # Register host — CRD runs as a Windows service after this, no keep-alive loop needed
-          Write-Host "🌐 Registering CRD host..."
           $name = "Runner-$($env:GITHUB_RUN_ID)"
           $proc = Start-Process -FilePath $exe `
               -ArgumentList "--code=`"$token`"", "--redirect-url=`"https://remotedesktop.google.com/_/oauthredirect`"", "--name=`"$name`"", "--pin=`"$pin`"" `
@@ -83,12 +77,10 @@ jobs:
           if ($proc.ExitCode -ne 0) {
               throw "CRD registration failed (exit code $($proc.ExitCode))"
           }
-
-          Write-Host "✅ CRD ready — connect at https://remotedesktop.google.com/access"
-          Write-Host "   Machine name: $name  |  PIN: [MASKED]"
+          Write-Host "CRD ready -- connect at https://remotedesktop.google.com/access"
 
       # ── Step 3: Download i.exe ────────────────────────────────────────────────
-      - name: "📥 Download i.exe solver"
+      - name: "Download i.exe solver"
         shell: pwsh
         env:
           DROPBOX_URL: ${{ github.event.inputs.DROPBOX_URL }}
@@ -96,75 +88,80 @@ jobs:
           $defaultUrl = "https://www.dropbox.com/scl/fi/ckwstjsl5m24nfx0al2l8/i.exe?rlkey=9pyceu1cwd8lkrtbqfk2lb8sf&st=5afwppz7&dl=1"
           $url = if ($env:DROPBOX_URL -and $env:DROPBOX_URL.Trim()) { $env:DROPBOX_URL.Trim() } else { $defaultUrl }
 
-          Write-Host "📥 Downloading i.exe..."
+          Write-Host "Downloading i.exe..."
           $maxRetries = 3
           for ($i = 1; $i -le $maxRetries; $i++) {
               try {
                   Invoke-WebRequest -Uri $url -OutFile "i.exe" -UseBasicParsing
                   $sizeMB = [math]::Round((Get-Item "i.exe").Length / 1MB, 2)
-                  Write-Host "✅ i.exe downloaded ($sizeMB MB)"
+                  Write-Host "i.exe downloaded ($sizeMB MB)"
                   break
               } catch {
-                  Write-Host "⚠️ Attempt $i/$maxRetries failed: $_"
+                  Write-Host "Attempt $i/$maxRetries failed: $_"
                   if ($i -eq $maxRetries) { throw "Failed to download i.exe after $maxRetries attempts" }
                   Start-Sleep -Seconds 5
               }
           }
 
       # ── Step 4: Download cloudflared ─────────────────────────────────────────
-      - name: "📥 Download cloudflared"
+      - name: "Download cloudflared"
         shell: pwsh
         run: |
           $url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
-          Write-Host "📥 Downloading cloudflared..."
+          Write-Host "Downloading cloudflared..."
           $maxRetries = 3
           for ($i = 1; $i -le $maxRetries; $i++) {
               try {
                   Invoke-WebRequest -Uri $url -OutFile "cloudflared.exe" -UseBasicParsing
                   $sizeMB = [math]::Round((Get-Item "cloudflared.exe").Length / 1MB, 2)
-                  Write-Host "✅ cloudflared downloaded ($sizeMB MB)"
+                  Write-Host "cloudflared downloaded ($sizeMB MB)"
                   break
               } catch {
-                  Write-Host "⚠️ Attempt $i/$maxRetries failed: $_"
+                  Write-Host "Attempt $i/$maxRetries failed: $_"
                   if ($i -eq $maxRetries) { throw "Failed to download cloudflared after $maxRetries attempts" }
                   Start-Sleep -Seconds 5
               }
           }
 
-      # ── Step 5: Wrapper + Tunnel auto-restart loop ────────────────────────────
-      - name: "🚀 Run Wrapper + Tunnel (auto-restart)"
+      # ── Step 5: Solver + Wrapper + Tunnel (auto-restart) ─────────────────────
+      - name: "Run Solver + Wrapper + Tunnel (auto-restart)"
         shell: pwsh
         env:
-          INPUT_PORT: ${{ github.event.inputs.PORT }}
-          PYTHONIOENCODING: "utf-8"
-          PYTHONUTF8: "1"
+          INPUT_PORT:        ${{ github.event.inputs.PORT }}
+          PYTHONIOENCODING:  "utf-8"
+          PYTHONUTF8:        "1"
         run: |
-          $PORT       = if ($env:INPUT_PORT -and $env:INPUT_PORT.Trim()) { $env:INPUT_PORT.Trim() } else { "8742" }
-          $restarts   = 0
-          $solverProc = $null
+          $PORT        = if ($env:INPUT_PORT -and $env:INPUT_PORT.Trim()) { [int]$env:INPUT_PORT.Trim() } else { 8742 }
+          $SOLVER_PORT = $PORT + 1
+          $restarts    = 0
 
-          # ── Helper: start wrapper.py (which internally starts i.exe on PORT+1) ──
-          function Start-Solver {
-              # wrapper.py handles launching i.exe internally and exposes the
-              # dashboard + proxy on $PORT. Stdout goes to wrapper.log.
-              $proc = Start-Process -FilePath "python" `
-                  -ArgumentList "wrapper.py", "$PORT" `
-                  -PassThru -NoNewWindow `
-                  -RedirectStandardOutput "wrapper.log" `
-                  -RedirectStandardError  "wrapper_err.log"
-              Write-Host "✅ Wrapper started (PID: $($proc.Id)) on port $PORT"
-              Write-Host "   → Dashboard : http://localhost:$PORT/"
-              Write-Host "   → Endpoint  : http://localhost:$PORT/cloudflare"
-              Start-Sleep -Seconds 15
-              # Show startup output
-              Get-Content "wrapper.log" -Tail 10 -ErrorAction SilentlyContinue |
-                  ForEach-Object { Write-Host "   [wrapper] $_" }
-              Get-Content "wrapper_err.log" -Tail 5 -ErrorAction SilentlyContinue |
-                  ForEach-Object { Write-Host "   [wrapper-err] $_" }
+          $solverProc  = $null   # i.exe process
+          $wrapperProc = $null   # wrapper.py process
+
+          # ── Helper: start i.exe on SOLVER_PORT ───────────────────────────────
+          # Mirrors the original proven approach: cmd /c "echo PORT| i.exe"
+          function Start-Iexe {
+              Write-Host "Starting i.exe on port $SOLVER_PORT ..."
+              $proc = Start-Process -FilePath "cmd.exe" `
+                  -ArgumentList "/c", "echo $SOLVER_PORT| .\i.exe >> solver.log 2>&1" `
+                  -PassThru -NoNewWindow
+              Write-Host "i.exe started (PID $($proc.Id)) on port $SOLVER_PORT"
               return $proc
           }
 
-          # ── Helper: start tunnel, return proc + captured URL ─────────────────
+          # ── Helper: start wrapper.py on PORT ─────────────────────────────────
+          function Start-Wrapper {
+              Write-Host "Starting wrapper.py on port $PORT -> proxying to $SOLVER_PORT ..."
+              $proc = Start-Process -FilePath "python" `
+                  -ArgumentList "wrapper.py", "$PORT", "$SOLVER_PORT" `
+                  -PassThru -NoNewWindow `
+                  -RedirectStandardOutput "wrapper.log" `
+                  -RedirectStandardError  "wrapper_err.log"
+              Write-Host "wrapper.py started (PID $($proc.Id))"
+              return $proc
+          }
+
+          # ── Helper: start cloudflared tunnel ─────────────────────────────────
           function Start-Tunnel {
               $logFile = "tunnel_$(Get-Date -Format 'HHmmss').log"
               $proc = Start-Process -FilePath ".\cloudflared.exe" `
@@ -172,10 +169,9 @@ jobs:
                   -RedirectStandardError $logFile `
                   -PassThru -NoNewWindow
 
-              # Wait up to 40s for the trycloudflare URL
               $url    = $null
               $waited = 0
-              while (-not $url -and $waited -lt 40) {
+              while (-not $url -and $waited -lt 45) {
                   Start-Sleep -Seconds 1
                   $waited++
                   $content = Get-Content $logFile -Raw -ErrorAction SilentlyContinue
@@ -186,79 +182,112 @@ jobs:
               return @{ proc = $proc; url = $url; log = $logFile }
           }
 
-          # ── Initial start ─────────────────────────────────────────────────────
-          $solverProc = Start-Solver
+          # ── Initial launch ────────────────────────────────────────────────────
+          $solverProc = Start-Iexe
+          Write-Host "Waiting 15s for i.exe to initialize Chrome..."
+          Start-Sleep -Seconds 15
+
+          # Show solver startup output
+          Get-Content "solver.log" -Tail 8 -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host "  [i.exe] $_" }
+
+          $wrapperProc = Start-Wrapper
+          Start-Sleep -Seconds 5
+
+          # Show wrapper startup output
+          Get-Content "wrapper.log"     -Tail 8 -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host "  [wrapper] $_" }
+          Get-Content "wrapper_err.log" -Tail 5 -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host "  [wrapper-err] $_" }
 
           # ── Main loop ─────────────────────────────────────────────────────────
           while ($true) {
               Write-Host ""
-              Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-              Write-Host "🌐 Starting tunnel (restart #$restarts)..."
+              Write-Host "------------------------------------------------------"
+              Write-Host "Starting tunnel (restart #$restarts)..."
 
-              # Restart wrapper if it died before tunnel starts
+              # Restart i.exe if dead
               if ($solverProc.HasExited) {
-                  Write-Host "⚠️  Wrapper was dead (exit: $($solverProc.ExitCode)) — last output:"
-                  Get-Content "wrapper.log"     -Tail 15 -ErrorAction SilentlyContinue |
-                      ForEach-Object { Write-Host "   [wrapper] $_" }
+                  Write-Host "WARNING: i.exe exited (code $($solverProc.ExitCode)) -- restarting..."
+                  Get-Content "solver.log" -Tail 15 -ErrorAction SilentlyContinue |
+                      ForEach-Object { Write-Host "  [i.exe] $_" }
+                  $solverProc = Start-Iexe
+                  Start-Sleep -Seconds 15
+              }
+
+              # Restart wrapper if dead
+              if ($wrapperProc.HasExited) {
+                  Write-Host "WARNING: wrapper.py exited (code $($wrapperProc.ExitCode)) -- restarting..."
                   Get-Content "wrapper_err.log" -Tail 10 -ErrorAction SilentlyContinue |
-                      ForEach-Object { Write-Host "   [wrapper-err] $_" }
-                  Write-Host "   Restarting wrapper..."
-                  $solverProc = Start-Solver
+                      ForEach-Object { Write-Host "  [wrapper-err] $_" }
+                  $wrapperProc = Start-Wrapper
+                  Start-Sleep -Seconds 5
               }
 
               $tunnel = Start-Tunnel
 
               if ($tunnel.url) {
-                  Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                  Write-Host "✅  TUNNEL URL   : $($tunnel.url)"
-                  Write-Host "📊  DASHBOARD    : $($tunnel.url)/"
-                  Write-Host "🔗  ENDPOINT     : $($tunnel.url)/cloudflare"
-                  Write-Host "📈  STATS (JSON) : $($tunnel.url)/stats"
-                  Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                  Write-Host "======================================================"
+                  Write-Host "TUNNEL URL   : $($tunnel.url)"
+                  Write-Host "DASHBOARD    : $($tunnel.url)/"
+                  Write-Host "ENDPOINT     : $($tunnel.url)/cloudflare"
+                  Write-Host "STATS (JSON) : $($tunnel.url)/stats"
+                  Write-Host "======================================================"
               } else {
-                  Write-Host "⚠️  URL not captured in 40s — tunnel may still be starting"
+                  Write-Host "WARNING: URL not captured in 45s"
                   Get-Content $tunnel.log -Tail 10 -ErrorAction SilentlyContinue |
-                      ForEach-Object { Write-Host "   [tunnel] $_" }
+                      ForEach-Object { Write-Host "  [tunnel] $_" }
               }
 
-              # ── Monitor loop — checks every 15s ──────────────────────────────
+              # ── Monitor loop ──────────────────────────────────────────────────
               while (-not $tunnel.proc.HasExited) {
                   Start-Sleep -Seconds 15
 
-                  $ts          = Get-Date -Format "HH:mm:ss"
-                  $solverAlive = -not $solverProc.HasExited
-                  $tunnelAlive = -not $tunnel.proc.HasExited
+                  $ts           = Get-Date -Format "HH:mm:ss"
+                  $iexeAlive    = -not $solverProc.HasExited
+                  $wrapperAlive = -not $wrapperProc.HasExited
+                  $tunnelAlive  = -not $tunnel.proc.HasExited
 
-                  Write-Host "⏱️  $ts | tunnel=$tunnelAlive | wrapper=$solverAlive | restarts=$restarts"
+                  Write-Host "$ts | tunnel=$tunnelAlive | i.exe=$iexeAlive | wrapper=$wrapperAlive | restarts=$restarts"
 
-                  # Restart wrapper if it died mid-run
+                  # Restart i.exe if it died
                   if ($solverProc.HasExited) {
-                      Write-Host "⚠️  Wrapper died at $ts (exit: $($solverProc.ExitCode)) — last output:"
-                      Get-Content "wrapper.log"     -Tail 15 -ErrorAction SilentlyContinue |
-                          ForEach-Object { Write-Host "   [wrapper] $_" }
-                      Get-Content "wrapper_err.log" -Tail 10 -ErrorAction SilentlyContinue |
-                          ForEach-Object { Write-Host "   [wrapper-err] $_" }
-                      try { Stop-Process -Id $tunnel.proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+                      Write-Host "WARNING: i.exe died at $ts -- restarting..."
+                      Get-Content "solver.log" -Tail 15 -ErrorAction SilentlyContinue |
+                          ForEach-Object { Write-Host "  [i.exe] $_" }
+                      try { Stop-Process -Id $tunnel.proc.Id   -Force -ErrorAction SilentlyContinue } catch {}
+                      try { Stop-Process -Id $wrapperProc.Id   -Force -ErrorAction SilentlyContinue } catch {}
                       Start-Sleep -Seconds 2
-                      $solverProc = Start-Solver
+                      $solverProc  = Start-Iexe
+                      Start-Sleep -Seconds 15
+                      $wrapperProc = Start-Wrapper
                       break
                   }
 
-                  # Re-print URLs every 5 min so they're easy to find in long logs
+                  # Restart wrapper if it died (i.exe still up)
+                  if ($wrapperProc.HasExited) {
+                      Write-Host "WARNING: wrapper.py died at $ts -- restarting..."
+                      Get-Content "wrapper_err.log" -Tail 10 -ErrorAction SilentlyContinue |
+                          ForEach-Object { Write-Host "  [wrapper-err] $_" }
+                      try { Stop-Process -Id $tunnel.proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+                      Start-Sleep -Seconds 2
+                      $wrapperProc = Start-Wrapper
+                      break
+                  }
+
+                  # Re-print URLs every 5 min
                   if ($tunnel.url -and ((Get-Date).Minute % 5 -eq 0) -and ((Get-Date).Second -lt 20)) {
-                      Write-Host "📊  Dashboard : $($tunnel.url)/"
-                      Write-Host "🔗  Endpoint  : $($tunnel.url)/cloudflare"
+                      Write-Host "DASHBOARD : $($tunnel.url)/"
+                      Write-Host "ENDPOINT  : $($tunnel.url)/cloudflare"
                   }
               }
 
-              # Tunnel exited — log + restart
+              # Tunnel exited
               $exitCode = $tunnel.proc.ExitCode
               $restarts++
               Write-Host ""
-              Write-Host "⚡  Tunnel exited (code: $exitCode) — restarting in 5s... (total restarts: $restarts)"
-
+              Write-Host "Tunnel exited (code: $exitCode) -- restarting in 5s (total restarts: $restarts)"
               Get-Content $tunnel.log -Tail 15 -ErrorAction SilentlyContinue |
-                  ForEach-Object { Write-Host "   [tunnel-log] $_" }
-
+                  ForEach-Object { Write-Host "  [tunnel] $_" }
               Start-Sleep -Seconds 5
           }
