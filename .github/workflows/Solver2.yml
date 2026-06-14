@@ -136,6 +136,8 @@ jobs:
         shell: pwsh
         env:
           INPUT_PORT: ${{ github.event.inputs.PORT }}
+          PYTHONIOENCODING: "utf-8"
+          PYTHONUTF8: "1"
         run: |
           $PORT       = if ($env:INPUT_PORT -and $env:INPUT_PORT.Trim()) { $env:INPUT_PORT.Trim() } else { "8742" }
           $restarts   = 0
