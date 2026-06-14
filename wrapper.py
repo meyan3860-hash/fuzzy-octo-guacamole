@@ -5,7 +5,7 @@ By 0.P aka @NUGHAboli
 
 Proxies /cloudflare to i.exe (running on PORT+1),
 tracks solve stats, and serves a live dashboard at /.
-Zero external dependencies — pure stdlib.
+Zero external dependencies -- pure stdlib.
 """
 
 import json
@@ -255,7 +255,7 @@ def _watch_solver(internal_port: int) -> None:
     while True:
         time.sleep(10)
         if _solver_proc is not None and _solver_proc.poll() is not None:
-            print(f"[wrapper] i.exe exited (code {_solver_proc.returncode}) — restarting...")
+            print(f"[wrapper] i.exe exited (code {_solver_proc.returncode}) -- restarting...")
             _start_solver(internal_port)
             time.sleep(8)
 
@@ -264,8 +264,8 @@ def _watch_solver(internal_port: int) -> None:
 def _banner(public_port: int, internal_port: int) -> None:
     w = 54
     print("=" * w)
-    print(f"  ⚡  CF Solver  —  By {AUTHOR}")
-    print(f"      v{VERSION}")
+    print(f"  CF Solver  --  By {AUTHOR}")
+    print(f"  v{VERSION}")
     print("=" * w)
     print(f"  Solver  (internal) : http://127.0.0.1:{internal_port}")
     print(f"  Wrapper (public)   : http://0.0.0.0:{public_port}")
@@ -279,7 +279,13 @@ def _banner(public_port: int, internal_port: int) -> None:
 def main() -> None:
     global _internal_port
 
-    public_port   = int(os.environ.get("PORT", sys.argv[1] if len(sys.argv) > 1 else "8742"))
+    # Force UTF-8 on Windows (avoids cp1252 UnicodeEncodeError)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+    public_port    = int(os.environ.get("PORT", sys.argv[1] if len(sys.argv) > 1 else "8742"))
     _internal_port = public_port + 1
 
     _stats["started_at"] = datetime.utcnow().isoformat() + "Z"
@@ -287,7 +293,7 @@ def main() -> None:
     _banner(public_port, _internal_port)
 
     _start_solver(_internal_port)
-    print(f"[wrapper] Waiting 10s for i.exe to initialize...")
+    print("[wrapper] Waiting 10s for i.exe to initialize...")
     time.sleep(10)
 
     watcher = threading.Thread(target=_watch_solver, args=(_internal_port,), daemon=True)
@@ -295,7 +301,7 @@ def main() -> None:
 
     server = HTTPServer(("0.0.0.0", public_port), _Handler)
     server.socket.settimeout(1)
-    print(f"[wrapper] Dashboard live → http://0.0.0.0:{public_port}/")
+    print(f"[wrapper] Dashboard live -> http://0.0.0.0:{public_port}/")
     print()
 
     try:
