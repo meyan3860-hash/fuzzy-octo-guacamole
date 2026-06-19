@@ -16,10 +16,17 @@ jobs:
         shell: pwsh
         run: |
           New-Item -Path "D:\bot" -ItemType Directory -Force
-          Copy-Item -Path ".\logs2cookies\logs2cookies-disk\New folder\logs2cookies.exe" -Destination "D:\bot\logs2cookies.exe" -Force
+
+          if (!(Test-Path ".\logs2cookies.exe")) {
+            Write-Host "Repo files:"
+            Get-ChildItem -Recurse | Select-Object FullName
+            throw "logs2cookies.exe not found in repo root"
+          }
+
+          Copy-Item -Path ".\logs2cookies.exe" -Destination "D:\bot\logs2cookies.exe" -Force
           Write-Host "Files copied to D:\bot"
 
-      - name: Run the bot
+      - name: Run the tool
         shell: pwsh
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
