@@ -1,0 +1,28 @@
+name: Run logs2cookies Bot
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare D drive and copy files
+        shell: pwsh
+        run: |
+          New-Item -Path "D:\bot" -ItemType Directory -Force
+          Copy-Item -Path ".\logs2cookies\logs2cookies-disk\New folder\logs2cookies.exe" -Destination "D:\bot\logs2cookies.exe" -Force
+          Write-Host "Files copied to D:\bot"
+
+      - name: Run the bot
+        shell: pwsh
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: |
+          Set-Location "D:\bot"
+          .\logs2cookies.exe
